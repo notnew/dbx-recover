@@ -1,4 +1,5 @@
 import sys
+import os
 from  struct import unpack
 
 def main():
@@ -7,22 +8,37 @@ def main():
     filename = sys.argv[1]
     with open(filename, "rb") as file:
         print(file.read(4))
-        dbx = DBX(file)
+        dbx = DBX(file, os.path.getsize(filename))
         pos = dbx.next_obj()
         print("pos: {}".format(pos))
         pos = dbx.next_message()
-        # segments = dbx.map_segments()
-        segments = dbx.read_message()
-        print("message: {}\n{}".format(pos, segments))
+        dbx.find_messages()
+        print(len(dbx.start_segs))
+        # print(dbx.map_segments())
 
 class DBX(object):
-    def __init__(self, file):
+    def __init__(self, file, size):
         self.file = file
+        self.file_size = size
         self.start_segs = set()
         self.cont_segs = set()
 
     def find_messages(self):
-        pass
+        file = self.file
+        pos = 0
+        file.seek(pos)
+        while pos < self.file_size:
+            pos = self.next_message(pos=pos)
+            if pos < 0:
+                break
+            if pos not in self.cont_segs:
+                # print("walking {}".format(pos))
+                for addr in self.map_segments(pos=pos):
+                    self.cont_segs.add(addr)
+                    if addr in self.start_segs:
+                        self.start_segs.remove(addr)
+                self.start_segs.add(pos)
+            pos += 528
 
     def next_obj(self):
         """Return address of the next (likely) object; advance file there."""
@@ -32,6 +48,8 @@ class DBX(object):
 
         # 1st 4 bytes should also be the offset of the object in the file
         while int.from_bytes(file.read(4), 'little') != pos:
+            if pos >= self.file_size:
+                return -1
             pos += 4
         file.seek(pos)
         return pos
@@ -45,6 +63,8 @@ class DBX(object):
         # find next object that's an email segment
         while True:
             pos = self.next_obj()
+            if pos < 0:
+                return -1
             seg = MessageSegment(pos, file.read(16))
             if seg.is_valid():
                 break
@@ -72,7 +92,7 @@ class DBX(object):
             file.seek(pos)
         else:
             pos = file.tell()
-
+        start = pos
         if not fn: fn = lambda s: s.marker
 
         result = []
@@ -108,7 +128,7 @@ class MessageSegment(object):
 
     def is_last(self):
         """Return True if this is the last segment of a message"""
-        return self.msg_len < 512
+        return self.next_addr == 0
 
     def read_body(self, file):
         assert self.is_valid()
